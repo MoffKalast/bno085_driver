@@ -1,0 +1,5 @@
+<launch>
+	<node name="bno085_node" pkg="bno085_driver" type="bno085_node.py" output="screen" respawn="true">
+		<rosparam command="load" file="$(find bno085_driver)/param/bno085.yaml"/>
+	</node>
+</launch>

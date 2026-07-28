@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="2">
+	<name>bno085_driver</name>
+	<version>0.1.0</version>
+	<description>UART-SHTP driver node for the BNO085 IMU, publishing sensor_msgs/Imu with on-demand magnetometer calibration.</description>
+	<maintainer email="vid.rijavec@fri.uni-lj.si">MoffKalast</maintainer>
+	<license>MIT</license>
+
+	<buildtool_depend>catkin</buildtool_depend>
+
+	<depend>rospy</depend>
+	<depend>sensor_msgs</depend>
+	<depend>std_msgs</depend>
+	<depend>diagnostic_msgs</depend>
+
+	<exec_depend>python3-serial</exec_depend>
+</package>
