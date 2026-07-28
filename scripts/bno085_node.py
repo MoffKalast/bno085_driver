@@ -211,9 +211,9 @@ class Bno085Node:
 		self.stall_timeout = float(rospy.get_param('~stall_timeout', 0.5))
 		self.diagnostic_period = 1.0 / float(rospy.get_param('~diagnostic_rate', 1.0))
 
-		self.imu_pub = rospy.Publisher('imu/data', Imu, queue_size=50)
-		self.diag_pub = rospy.Publisher('/diagnostics', DiagnosticArray, queue_size=10)
-		self.calibrate_sub = rospy.Subscriber('~calibrate', Bool, self.calibrate_callback, queue_size=5)
+		self.imu_pub = rospy.Publisher('/imu/data', Imu, queue_size=50)
+		self.diag_pub = rospy.Publisher('/imu/diagnostics', DiagnosticArray, queue_size=10)
+		self.calibrate_sub = rospy.Subscriber('/imu/calibrate', Bool, self.calibrate_callback, queue_size=5)
 
 		self.port = None
 		self.reader = None
@@ -350,7 +350,7 @@ class Bno085Node:
 			host_time = self.clock.update(arrival, sensor_time)
 		else:
 			host_time = arrival
-			
+
 		msg = Imu()
 		msg.header.stamp = rospy.Time.now() - rospy.Duration(max(0.0, time.monotonic() - host_time))
 		msg.header.frame_id = self.frame_id
