@@ -29,13 +29,15 @@ roslaunch bno085_driver bno085.launch
 rostopic pub -1 /bno085/calibrate std_msgs/Bool "data: true"
 ```
 
-Move the sensor into all orientations and let it rest for a moment in each, watch the status under `/diagnostics`. `mag_cal_status` and `rv_status` both need to reach 2 before a save is allowed.
+All dynamic calibration (accelerometer, gyroscope and magnetometer) is off during normal operation, so the stored calibration is used as-is and never drifts. It is only enabled for all three during this routine. The BNO's periodic background save is disabled too, so the calibration in flash only changes when you explicitly save it here.
+
+First rest the sensor still for a couple of seconds on each of its six faces (accelerometer), then move it slowly through all orientations (magnetometer), in the area where the robot will operate. Watch the status under `/diagnostics`: `accel_cal_status`, `gyro_cal_status`, `mag_cal_status` and `rv_status` all need to reach 2 before a save is allowed. Since the magnetic environment differs between locations, re-run the calibration whenever the robot moves to a new area.
 
 ```
 rostopic pub -1 /bno085/calibrate std_msgs/Bool "data: false"   # stop and save
 ```
 
-On the falling edge the node issues Save DCD, waits for the command response, then soft-resets and restarts the stream with the configured `calibrate_*` flags. The calibration is saved and autoloaded on the BNO itself.
+On the falling edge the node issues Save DCD, waits for the command response, then soft-resets and restarts the stream with calibration off. The calibration is saved and autoloaded on the BNO itself. `calibration_enabled` in `/diagnostics` shows the enable flags the sensor itself reported back.
 
 If the fit did not converge the save is skipped and logged as a warning; set `~force_save` to save anyway.
 

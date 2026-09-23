@@ -26,6 +26,7 @@ COMMAND_REQUEST = 0xF2
 COMMAND_RESPONSE = 0xF1
 ME_CALIBRATE = 0x07
 SAVE_DCD = 0x06
+CONFIGURE_PERIODIC_DCD_SAVE = 0x09
 
 ACCELEROMETER = 0x01
 GYROSCOPE_CALIBRATED = 0x02
@@ -148,8 +149,11 @@ def command_request(command, params=()):
 		cargo[3 + i] = p
 	return bytes(cargo)
 
-def me_calibrate(accel, gyro, mag):
-	return command_request(ME_CALIBRATE, (int(accel), int(gyro), int(mag)))
+def me_calibrate(enabled):
+	return command_request(ME_CALIBRATE, (int(enabled),) * 3)
+
+def disable_periodic_dcd_save():
+	return command_request(CONFIGURE_PERIODIC_DCD_SAVE, (1,))
 
 class SensorClock:
 	"""Maps the BNO timebase onto host time. host = sensor + offset + queueing, and queueing is
@@ -192,9 +196,6 @@ class Bno085Node:
 		self.orientation_report = ORIENTATION_REPORTS[report_name]
 		self.report_name = report_name
 
-		self.cal_accel = rospy.get_param('~calibrate_accel', True)
-		self.cal_gyro = rospy.get_param('~calibrate_gyro', True)
-		self.cal_mag = rospy.get_param('~calibrate_mag', False)
 		self.force_save = rospy.get_param('~force_save', False)
 
 		self.orientation_stddev = float(rospy.get_param('~orientation_stddev', 0.05))
@@ -223,12 +224,15 @@ class Bno085Node:
 
 		self.calibration_requested = False
 		self.calibrating = False
+		self.calibration_applied = None
 		self.last_save_result = 'never'
 
 		self.latest_gyro = None
 		self.latest_accel = None
 		self.rv_status = 0
 		self.rv_accuracy = float('nan')
+		self.accel_status = 0
+		self.gyro_status = 0
 		self.mag_status = 0
 		self.mag_field = float('nan')
 		self.report_count = 0
@@ -260,10 +264,9 @@ class Bno085Node:
 		self.command_responses.clear()
 
 	def configure(self):
-		if self.calibrating:
-			self.send(CHANNEL_CONTROL, me_calibrate(True, True, True))
-		else:
-			self.send(CHANNEL_CONTROL, me_calibrate(self.cal_accel, self.cal_gyro, self.cal_mag))
+		self.calibration_applied = None
+		self.send(CHANNEL_CONTROL, disable_periodic_dcd_save())
+		self.send(CHANNEL_CONTROL, me_calibrate(self.calibrating))
 		self.send(CHANNEL_CONTROL, set_feature(self.orientation_report, self.interval_us))
 		self.send(CHANNEL_CONTROL, set_feature(ACCELEROMETER, self.interval_us))
 		self.send(CHANNEL_CONTROL, set_feature(GYROSCOPE_CALIBRATED, self.interval_us))
@@ -282,7 +285,7 @@ class Bno085Node:
 				if frame is None:
 					continue
 				if self.handle_frame(frame) and self.last_report_time:
-					rospy.loginfo('streaming %s at %d us (attempt %d), cal accel=%s gyro=%s mag=%s', self.report_name, self.interval_us, attempt, self.cal_accel, self.cal_gyro, self.cal_mag)
+					rospy.loginfo('streaming %s at %d us (attempt %d), %s', self.report_name, self.interval_us, attempt, 'calibrating' if self.calibrating else 'calibration off')
 					self.stall_resends = 0
 					return
 			rospy.logwarn_throttle(5.0, 'no reports from the BNO after %d attempt(s); check the FT-TX -> BNO-RX wire and PS1=high/PS0=low' % attempt)
@@ -298,10 +301,17 @@ class Bno085Node:
 		if channel == CHANNEL_CONTROL:
 			if len(cargo) >= 6 and cargo[0] == COMMAND_RESPONSE:
 				self.command_responses.append(bytes(cargo))
+				if cargo[2] == ME_CALIBRATE and len(cargo) >= 9:
+					self.record_calibration_applied(tuple(bool(b) for b in cargo[6:9]))
 			return False
 		if channel != CHANNEL_INPUT_REPORTS:
 			return False
 		return self.handle_input_reports(arrival, cargo)
+
+	def record_calibration_applied(self, flags):
+		self.calibration_applied = flags
+		if flags != (self.calibrating,) * 3:
+			rospy.logwarn('BNO reports calibration enables accel=%s gyro=%s mag=%s, expected all %s', flags[0], flags[1], flags[2], self.calibrating)
 
 	def handle_input_reports(self, arrival, cargo):
 		got_orientation = False
@@ -322,8 +332,10 @@ class Bno085Node:
 			delay = ((status >> 2) << 8) | report[3]
 			sensor_time = (self.timebase + delay) * TIMEBASE_TICK
 			if rid == ACCELEROMETER:
+				self.accel_status = status & 0x03
 				self.latest_accel = tuple(v * Q8 for v in struct.unpack_from('<3h', report, 4))
 			elif rid == GYROSCOPE_CALIBRATED:
+				self.gyro_status = status & 0x03
 				self.latest_gyro = tuple(v * Q9 for v in struct.unpack_from('<3h', report, 4))
 			elif rid == MAGNETIC_FIELD:
 				mx, my, mz = struct.unpack_from('<3h', report, 4)
@@ -398,28 +410,31 @@ class Bno085Node:
 		return False
 
 	def enter_calibration(self):
-		rospy.loginfo('calibration started: slow figure-8s through all axes, away from metal and electronics')
+		rospy.loginfo('calibration started: rest the sensor still on each of its six faces, then slow figure-8s through all axes, away from metal and electronics')
 		self.calibrating = True
+		self.accel_status = 0
+		self.gyro_status = 0
 		self.mag_status = 0
 		self.mag_field = float('nan')
 		self.configure()
 
 	def finish_calibration(self):
-		converged = self.mag_status >= 2 and self.rv_status >= 2
+		statuses = 'accel_cal=%d gyro_cal=%d mag_cal=%d rv_status=%d' % (self.accel_status, self.gyro_status, self.mag_status, self.rv_status)
+		converged = min(self.accel_status, self.gyro_status, self.mag_status, self.rv_status) >= 2
 		if converged or self.force_save:
 			if not converged:
-				rospy.logwarn('saving anyway (force_save): mag_cal=%d rv_status=%d', self.mag_status, self.rv_status)
+				rospy.logwarn('saving anyway (force_save): %s', statuses)
 			self.command_responses.clear()
 			self.send(CHANNEL_CONTROL, command_request(SAVE_DCD))
 			if self.wait_for_command_response(SAVE_DCD, 1.0):
 				self.last_save_result = 'saved'
-				rospy.loginfo('Save DCD confirmed (mag_cal=%d rv_status=%d rv_acc=%.3f rad), auto-restores on every boot', self.mag_status, self.rv_status, self.rv_accuracy)
+				rospy.loginfo('Save DCD confirmed (%s rv_acc=%.3f rad), auto-restores on every boot', statuses, self.rv_accuracy)
 			else:
 				self.last_save_result = 'no response'
 				rospy.logerr('no success response to Save DCD; calibration may not have persisted')
 		else:
 			self.last_save_result = 'skipped, not converged'
-			rospy.logwarn('not saving: calibration did not converge (mag_cal=%d, rv_status=%d; need >=2 each). Move away from metal and retry, or set ~force_save.', self.mag_status, self.rv_status)
+			rospy.logwarn('not saving: calibration did not converge (%s, need >=2 each). Move away from metal and retry, or set ~force_save.', statuses)
 		self.calibrating = False
 		self.start_stream()
 
@@ -433,7 +448,10 @@ class Bno085Node:
 			status.message = 'no reports'
 		elif self.calibrating:
 			status.level = DiagnosticStatus.WARN
-			status.message = 'calibrating (mag_cal=%d, rv_status=%d)' % (self.mag_status, self.rv_status)
+			status.message = 'calibrating (accel_cal=%d, gyro_cal=%d, mag_cal=%d, rv_status=%d)' % (self.accel_status, self.gyro_status, self.mag_status, self.rv_status)
+		elif self.calibration_applied != (False, False, False):
+			status.level = DiagnosticStatus.WARN
+			status.message = 'calibration off not confirmed by sensor'
 		elif self.rv_status >= 2:
 			status.level = DiagnosticStatus.OK
 			status.message = 'streaming'
@@ -445,6 +463,9 @@ class Bno085Node:
 			KeyValue('orientation_report', self.report_name),
 			KeyValue('rv_status', str(self.rv_status)),
 			KeyValue('rv_accuracy_rad', '%.4f' % self.rv_accuracy),
+			KeyValue('calibration_enabled', 'unconfirmed' if self.calibration_applied is None else 'accel=%d gyro=%d mag=%d' % self.calibration_applied),
+			KeyValue('accel_cal_status', str(self.accel_status)),
+			KeyValue('gyro_cal_status', str(self.gyro_status)),
 			KeyValue('mag_cal_status', str(self.mag_status)),
 			KeyValue('mag_field_ut', '%.1f' % self.mag_field),
 			KeyValue('measured_rate_hz', '%.1f' % self.measured_rate),

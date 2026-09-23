@@ -6,9 +6,6 @@ frame_id: imu_link
 # rotation_vector (9-axis, absolute heading), game_rotation_vector (6-axis, drifting but smooth yaw) or geomagnetic_rotation_vector (accel+mag, low power)
 orientation_report: rotation_vector
 
-calibrate_accel: true
-calibrate_gyro: true
-calibrate_mag: false
 force_save: false
 
 world_rotation: [0.0, 0.0, 0.0]
