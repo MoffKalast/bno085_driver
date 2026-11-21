@@ -1,0 +1,5 @@
+<launch>
+	<node name="bno085_node" pkg="bno085_driver" exec="bno085_node.py" output="screen" respawn="true">
+		<param from="$(find-pkg-share bno085_driver)/param/bno085.yaml"/>
+	</node>
+</launch>

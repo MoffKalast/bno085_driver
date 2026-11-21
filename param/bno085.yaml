@@ -1,24 +1,26 @@
-port: /dev/ttyBNO
-baud: 3000000
-rate: 50.0
-frame_id: imu_link
+/**:
+  ros__parameters:
+    port: /dev/ttyBNO
+    baud: 3000000
+    rate: 50.0
+    frame_id: imu_link
 
-# rotation_vector (9-axis, absolute heading), game_rotation_vector (6-axis, drifting but smooth yaw) or geomagnetic_rotation_vector (accel+mag, low power)
-orientation_report: rotation_vector
+    # rotation_vector (9-axis, absolute heading), game_rotation_vector (6-axis, drifting but smooth yaw) or geomagnetic_rotation_vector (accel+mag, low power)
+    orientation_report: rotation_vector
 
-force_save: false
+    force_save: false
 
-world_rotation: [0.0, 0.0, 0.0]
-mount_rotation: [0.0, 0.0, 0.0]
+    world_rotation: [0.0, 0.0, 0.0]
+    mount_rotation: [0.0, 0.0, 0.0]
 
-orientation_stddev: 0.05
-orientation_stddev_floor: 0.01
-angular_velocity_stddev: 0.005
-linear_acceleration_stddev: 0.05
+    orientation_stddev: 0.05
+    orientation_stddev_floor: 0.01
+    angular_velocity_stddev: 0.005
+    linear_acceleration_stddev: 0.05
 
-use_sensor_time: true
-clock_window: 10.0
-clock_tolerance: 0.05
+    use_sensor_time: true
+    clock_window: 10.0
+    clock_tolerance: 0.05
 
-stall_timeout: 0.5
-diagnostic_rate: 1.0
+    stall_timeout: 0.5
+    diagnostic_rate: 1.0

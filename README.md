@@ -1,6 +1,6 @@
 # bno085_driver
 
-One rospy node speaking SHTP over UART to a BNO085. Publishes `sensor_msgs/Imu` on `/imu/data`, runs magnetometer calibration on demand, and reports health on `/imu/diagnostics`.
+One rclpy node speaking SHTP over UART to a BNO085. Publishes `sensor_msgs/Imu` on `/imu/data`, runs magnetometer calibration on demand, and reports health on `/imu/diagnostics`.
 
 The carrier board needs to have the soldering pad for SHTP bridged (PS1 high PS0 low) the host TX line reaching the BNO RX pin. The USB-Serial chip must be able to handle 3M baud, most don't.
 
@@ -20,13 +20,13 @@ sudo udevadm trigger
 ## Launch
 
 ```
-roslaunch bno085_driver bno085.launch
+ros2 launch bno085_driver bno085.launch.xml
 ```
 
 ## Calibration
 
 ```
-rostopic pub -1 /imu/calibrate std_msgs/Bool "data: true"
+ros2 topic pub --once /imu/calibrate std_msgs/msg/Bool "{data: true}"
 ```
 
 All dynamic calibration (accelerometer, gyroscope and magnetometer) is off during normal operation, so the stored calibration is used as-is and never drifts. It is only enabled for all three during this routine. The BNO's periodic background save is disabled too, so the calibration in flash only changes when you explicitly save it here.
@@ -34,12 +34,12 @@ All dynamic calibration (accelerometer, gyroscope and magnetometer) is off durin
 First rest the sensor still for a couple of seconds on each of its six faces (accelerometer), then move it slowly through all orientations (magnetometer), in the area where the robot will operate. Watch the status under `/imu/diagnostics`: `accel_cal_status`, `gyro_cal_status`, `mag_cal_status` and `rv_status` all need to reach 2 before a save is allowed. Since the magnetic environment differs between locations, re-run the calibration whenever the robot moves to a new area.
 
 ```
-rostopic pub -1 /imu/calibrate std_msgs/Bool "data: false"   # stop and save
+ros2 topic pub --once /imu/calibrate std_msgs/msg/Bool "{data: false}"   # stop and save
 ```
 
 On the falling edge the node issues Save DCD, waits for the command response, then soft-resets and restarts the stream with calibration off. The calibration is saved and autoloaded on the BNO itself. `calibration_enabled` in `/imu/diagnostics` shows the enable flags the sensor itself reported back.
 
-If the fit did not converge the save is skipped and logged as a warning; set `~force_save` to save anyway.
+If the fit did not converge the save is skipped and logged as a warning; set the `force_save` parameter to save anyway.
 
 ## Frames
 

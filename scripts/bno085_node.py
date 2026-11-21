@@ -4,8 +4,11 @@ import struct
 import time
 from collections import deque
 
-import rospy
+import rclpy
 import serial
+from rclpy.duration import Duration
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool
@@ -181,40 +184,41 @@ class SensorClock:
 		self.samples.clear()
 		self.trusted = True
 
-class Bno085Node:
+class Bno085Node(Node):
 	def __init__(self):
-		self.port_name = rospy.get_param('~port', '/dev/ttyUSB0')
-		self.baud = rospy.get_param('~baud', 3000000)
-		self.frame_id = rospy.get_param('~frame_id', 'imu_link')
-		rate_hz = float(rospy.get_param('~rate', 100.0))
+		super().__init__('bno085')
+		self.port_name = self.declare_parameter('port', '/dev/ttyUSB0').value
+		self.baud = self.declare_parameter('baud', 3000000).value
+		self.frame_id = self.declare_parameter('frame_id', 'imu_link').value
+		rate_hz = float(self.declare_parameter('rate', 100.0).value)
 		self.interval_us = int(1000000 / rate_hz)
 
-		report_name = rospy.get_param('~orientation_report', 'rotation_vector')
+		report_name = self.declare_parameter('orientation_report', 'rotation_vector').value
 		if report_name not in ORIENTATION_REPORTS:
-			rospy.logwarn('unknown orientation_report %r, falling back to rotation_vector', report_name)
+			self.get_logger().warning('unknown orientation_report %r, falling back to rotation_vector' % report_name)
 			report_name = 'rotation_vector'
 		self.orientation_report = ORIENTATION_REPORTS[report_name]
 		self.report_name = report_name
 
-		self.force_save = rospy.get_param('~force_save', False)
+		self.force_save = self.declare_parameter('force_save', False).value
 
-		self.orientation_stddev = float(rospy.get_param('~orientation_stddev', 0.05))
-		self.orientation_stddev_floor = float(rospy.get_param('~orientation_stddev_floor', 0.01))
-		self.angular_velocity_stddev = float(rospy.get_param('~angular_velocity_stddev', 0.005))
-		self.linear_acceleration_stddev = float(rospy.get_param('~linear_acceleration_stddev', 0.05))
+		self.orientation_stddev = float(self.declare_parameter('orientation_stddev', 0.05).value)
+		self.orientation_stddev_floor = float(self.declare_parameter('orientation_stddev_floor', 0.01).value)
+		self.angular_velocity_stddev = float(self.declare_parameter('angular_velocity_stddev', 0.005).value)
+		self.linear_acceleration_stddev = float(self.declare_parameter('linear_acceleration_stddev', 0.05).value)
 
-		self.world_rotation = quat_from_rpy(*[float(v) for v in rospy.get_param('~world_rotation', [0.0, 0.0, 0.0])])
-		self.mount_rotation = quat_from_rpy(*[float(v) for v in rospy.get_param('~mount_rotation', [0.0, 0.0, 0.0])])
+		self.world_rotation = quat_from_rpy(*[float(v) for v in self.declare_parameter('world_rotation', [0.0, 0.0, 0.0]).value])
+		self.mount_rotation = quat_from_rpy(*[float(v) for v in self.declare_parameter('mount_rotation', [0.0, 0.0, 0.0]).value])
 		self.mount_inverse = quat_conjugate(self.mount_rotation)
 
-		self.use_sensor_time = rospy.get_param('~use_sensor_time', True)
-		self.clock = SensorClock(float(rospy.get_param('~clock_window', 10.0)), float(rospy.get_param('~clock_tolerance', 0.05)))
-		self.stall_timeout = float(rospy.get_param('~stall_timeout', 0.5))
-		self.diagnostic_period = 1.0 / float(rospy.get_param('~diagnostic_rate', 1.0))
+		self.use_sensor_time = self.declare_parameter('use_sensor_time', True).value
+		self.clock = SensorClock(float(self.declare_parameter('clock_window', 10.0).value), float(self.declare_parameter('clock_tolerance', 0.05).value))
+		self.stall_timeout = float(self.declare_parameter('stall_timeout', 0.5).value)
+		self.diagnostic_period = 1.0 / float(self.declare_parameter('diagnostic_rate', 1.0).value)
 
-		self.imu_pub = rospy.Publisher('/imu/data', Imu, queue_size=50)
-		self.diag_pub = rospy.Publisher('/imu/diagnostics', DiagnosticArray, queue_size=10)
-		self.calibrate_sub = rospy.Subscriber('/imu/calibrate', Bool, self.calibrate_callback, queue_size=5)
+		self.imu_pub = self.create_publisher(Imu, 'imu/data', 50)
+		self.diag_pub = self.create_publisher(DiagnosticArray, 'imu/diagnostics', 10)
+		self.calibrate_sub = self.create_subscription(Bool, 'imu/calibrate', self.calibrate_callback, 5)
 
 		self.port = None
 		self.reader = None
@@ -275,7 +279,7 @@ class Bno085Node:
 
 	def start_stream(self):
 		attempt = 0
-		while not rospy.is_shutdown():
+		while rclpy.ok():
 			attempt += 1
 			self.soft_reset()
 			self.configure()
@@ -285,10 +289,10 @@ class Bno085Node:
 				if frame is None:
 					continue
 				if self.handle_frame(frame) and self.last_report_time:
-					rospy.loginfo('streaming %s at %d us (attempt %d), %s', self.report_name, self.interval_us, attempt, 'calibrating' if self.calibrating else 'calibration off')
+					self.get_logger().info('streaming %s at %d us (attempt %d), %s' % (self.report_name, self.interval_us, attempt, 'calibrating' if self.calibrating else 'calibration off'))
 					self.stall_resends = 0
 					return
-			rospy.logwarn_throttle(5.0, 'no reports from the BNO after %d attempt(s); check the FT-TX -> BNO-RX wire and PS1=high/PS0=low' % attempt)
+			self.get_logger().warning('no reports from the BNO after %d attempt(s); check the FT-TX -> BNO-RX wire and PS1=high/PS0=low' % attempt, throttle_duration_sec=5.0)
 
 	def handle_frame(self, frame):
 		arrival, data = frame
@@ -311,7 +315,7 @@ class Bno085Node:
 	def record_calibration_applied(self, flags):
 		self.calibration_applied = flags
 		if flags != (self.calibrating,) * 3:
-			rospy.logwarn('BNO reports calibration enables accel=%s gyro=%s mag=%s, expected all %s', flags[0], flags[1], flags[2], self.calibrating)
+			self.get_logger().warning('BNO reports calibration enables accel=%s gyro=%s mag=%s, expected all %s' % (flags[0], flags[1], flags[2], self.calibrating))
 
 	def handle_input_reports(self, arrival, cargo):
 		got_orientation = False
@@ -364,7 +368,7 @@ class Bno085Node:
 			host_time = arrival
 
 		msg = Imu()
-		msg.header.stamp = rospy.Time.now() - rospy.Duration(max(0.0, time.monotonic() - host_time))
+		msg.header.stamp = (self.get_clock().now() - Duration(seconds=max(0.0, time.monotonic() - host_time))).to_msg()
 		msg.header.frame_id = self.frame_id
 		msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w = q
 
@@ -399,7 +403,7 @@ class Bno085Node:
 
 	def wait_for_command_response(self, command, timeout):
 		deadline = time.monotonic() + timeout
-		while time.monotonic() < deadline and not rospy.is_shutdown():
+		while time.monotonic() < deadline and rclpy.ok():
 			for cargo in list(self.command_responses):
 				if cargo[2] == command:
 					self.command_responses.remove(cargo)
@@ -410,7 +414,7 @@ class Bno085Node:
 		return False
 
 	def enter_calibration(self):
-		rospy.loginfo('calibration started: rest the sensor still on each of its six faces, then slow figure-8s through all axes, away from metal and electronics')
+		self.get_logger().info('calibration started: rest the sensor still on each of its six faces, then slow figure-8s through all axes, away from metal and electronics')
 		self.calibrating = True
 		self.accel_status = 0
 		self.gyro_status = 0
@@ -423,24 +427,24 @@ class Bno085Node:
 		converged = min(self.accel_status, self.gyro_status, self.mag_status, self.rv_status) >= 2
 		if converged or self.force_save:
 			if not converged:
-				rospy.logwarn('saving anyway (force_save): %s', statuses)
+				self.get_logger().warning('saving anyway (force_save): %s' % statuses)
 			self.command_responses.clear()
 			self.send(CHANNEL_CONTROL, command_request(SAVE_DCD))
 			if self.wait_for_command_response(SAVE_DCD, 1.0):
 				self.last_save_result = 'saved'
-				rospy.loginfo('Save DCD confirmed (%s rv_acc=%.3f rad), auto-restores on every boot', statuses, self.rv_accuracy)
+				self.get_logger().info('Save DCD confirmed (%s rv_acc=%.3f rad), auto-restores on every boot' % (statuses, self.rv_accuracy))
 			else:
 				self.last_save_result = 'no response'
-				rospy.logerr('no success response to Save DCD; calibration may not have persisted')
+				self.get_logger().error('no success response to Save DCD; calibration may not have persisted')
 		else:
 			self.last_save_result = 'skipped, not converged'
-			rospy.logwarn('not saving: calibration did not converge (%s, need >=2 each). Move away from metal and retry, or set ~force_save.', statuses)
+			self.get_logger().warning('not saving: calibration did not converge (%s, need >=2 each). Move away from metal and retry, or set force_save.' % statuses)
 		self.calibrating = False
 		self.start_stream()
 
 	def publish_diagnostics(self):
 		status = DiagnosticStatus()
-		status.name = rospy.get_name().lstrip('/') + ': bno085'
+		status.name = self.get_fully_qualified_name().lstrip('/') + ': bno085'
 		status.hardware_id = self.port_name
 		stale = self.last_report_time and (time.monotonic() - self.last_report_time) > self.stall_timeout
 		if stale:
@@ -459,29 +463,31 @@ class Bno085Node:
 			status.level = DiagnosticStatus.WARN
 			status.message = 'orientation accuracy low (rv_status=%d)' % self.rv_status
 		status.values = [
-			KeyValue('mode', 'calibrating' if self.calibrating else 'running'),
-			KeyValue('orientation_report', self.report_name),
-			KeyValue('rv_status', str(self.rv_status)),
-			KeyValue('rv_accuracy_rad', '%.4f' % self.rv_accuracy),
-			KeyValue('calibration_enabled', 'unconfirmed' if self.calibration_applied is None else 'accel=%d gyro=%d mag=%d' % self.calibration_applied),
-			KeyValue('accel_cal_status', str(self.accel_status)),
-			KeyValue('gyro_cal_status', str(self.gyro_status)),
-			KeyValue('mag_cal_status', str(self.mag_status)),
-			KeyValue('mag_field_ut', '%.1f' % self.mag_field),
-			KeyValue('measured_rate_hz', '%.1f' % self.measured_rate),
-			KeyValue('sensor_clock', 'in use' if (self.use_sensor_time and self.clock.trusted) else 'host time'),
-			KeyValue('last_save', self.last_save_result),
+			KeyValue(key='mode', value='calibrating' if self.calibrating else 'running'),
+			KeyValue(key='orientation_report', value=self.report_name),
+			KeyValue(key='rv_status', value=str(self.rv_status)),
+			KeyValue(key='rv_accuracy_rad', value='%.4f' % self.rv_accuracy),
+			KeyValue(key='calibration_enabled', value='unconfirmed' if self.calibration_applied is None else 'accel=%d gyro=%d mag=%d' % self.calibration_applied),
+			KeyValue(key='accel_cal_status', value=str(self.accel_status)),
+			KeyValue(key='gyro_cal_status', value=str(self.gyro_status)),
+			KeyValue(key='mag_cal_status', value=str(self.mag_status)),
+			KeyValue(key='mag_field_ut', value='%.1f' % self.mag_field),
+			KeyValue(key='measured_rate_hz', value='%.1f' % self.measured_rate),
+			KeyValue(key='sensor_clock', value='in use' if (self.use_sensor_time and self.clock.trusted) else 'host time'),
+			KeyValue(key='last_save', value=self.last_save_result),
 		]
 		array = DiagnosticArray()
-		array.header.stamp = rospy.Time.now()
+		array.header.stamp = self.get_clock().now().to_msg()
 		array.status = [status]
 		self.diag_pub.publish(array)
 
 	def spin(self):
-		while not rospy.is_shutdown():
+		while rclpy.ok():
 			frame = self.reader.next_frame(time.monotonic() + 0.02)
 			if frame is not None:
 				self.handle_frame(frame)
+
+			rclpy.spin_once(self, timeout_sec=0.0)
 			now = time.monotonic()
 
 			if self.calibration_requested != self.calibrating:
@@ -494,10 +500,10 @@ class Bno085Node:
 			if self.last_report_time and now - self.last_report_time > self.stall_timeout:
 				self.stall_resends += 1
 				if self.stall_resends > 3:
-					rospy.logwarn('stream dead after %d resends, resetting the sensor', self.stall_resends - 1)
+					self.get_logger().warning('stream dead after %d resends, resetting the sensor' % (self.stall_resends - 1))
 					self.start_stream()
 				else:
-					rospy.logwarn('stream stalled, resending set-feature')
+					self.get_logger().warning('stream stalled, resending set-feature')
 					self.send(CHANNEL_CONTROL, set_feature(self.orientation_report, self.interval_us))
 				self.last_report_time = time.monotonic()
 			elif self.last_report_time and self.stall_resends:
@@ -508,24 +514,32 @@ class Bno085Node:
 				self.next_diagnostic = now + self.diagnostic_period
 
 	def run(self):
-		while not rospy.is_shutdown():
+		while rclpy.ok():
 			try:
 				with serial.Serial(self.port_name, self.baud, timeout=0.02) as port:
-					rospy.loginfo('BNO085 UART-SHTP on %s @ %d baud', self.port_name, self.baud)
+					self.get_logger().info('BNO085 UART-SHTP on %s @ %d baud' % (self.port_name, self.baud))
 					self.port = port
 					self.reader = FrameReader(port)
 					self.last_report_time = 0.0
 					self.start_stream()
 					self.spin()
 			except (serial.SerialException, OSError) as e:
-				rospy.logwarn_throttle(5.0, 'serial trouble on %s (%s), reopening' % (self.port_name, e))
+				self.get_logger().warning('serial trouble on %s (%s), reopening' % (self.port_name, e), throttle_duration_sec=5.0)
 				self.port = None
 				self.reader = None
-				rospy.sleep(1.0)
+				time.sleep(1.0)
 
 def main():
-	rospy.init_node('bno085')
-	Bno085Node().run()
+	rclpy.init()
+	node = Bno085Node()
+
+	try:
+		node.run()
+	except (KeyboardInterrupt, ExternalShutdownException):
+		pass
+	finally:
+		node.destroy_node()
+		rclpy.try_shutdown()
 
 if __name__ == '__main__':
 	main()

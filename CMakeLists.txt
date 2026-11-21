@@ -1,10 +1,10 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(bno085_driver)
 
-find_package(catkin REQUIRED COMPONENTS rospy sensor_msgs std_msgs diagnostic_msgs)
+find_package(ament_cmake REQUIRED)
 
-catkin_package(CATKIN_DEPENDS rospy sensor_msgs std_msgs diagnostic_msgs)
+install(PROGRAMS scripts/bno085_node.py DESTINATION lib/${PROJECT_NAME})
 
-catkin_install_python(PROGRAMS scripts/bno085_node.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(DIRECTORY launch param DESTINATION share/${PROJECT_NAME})
 
-install(DIRECTORY launch param DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+ament_package()
